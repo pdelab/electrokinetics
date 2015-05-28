@@ -2134,7 +2134,7 @@ int main()
 
 
         // DEBUG: check frobenius norms
-        double A_stokes_frob = 0.0;
+/*        double A_stokes_frob = 0.0;
         for(uint frobind = 0; frobind < nz2; frobind++) {
             A_stokes_frob += ax2[frobind]*ax2[frobind];
         }
@@ -2157,7 +2157,7 @@ int main()
         }
         printf("    Matrix norm: || A ||_F^2 = %e \n",A_frob);fflush(stdout);
         printf("    Vector norm: || b ||_0^2 = %e \n",lin_normb_fasp0);fflush(stdout);
-
+*/
 
 
             

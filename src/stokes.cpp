@@ -15,6 +15,7 @@
 #include <sys/time.h>
 #include <string.h>
 #include "./include/dg_stokes.h"
+#include "./include/pressure_mass.h"
 #include "./include/poisson_cell_marker.h"
 #include "./include/gradient_recovery.h"
 extern "C"
@@ -39,6 +40,7 @@ extern "C"
                                                                    Schwarz_param *schparam,
                                                                    dCSRmat *Mp);
 #define FASP_BSR     ON  /** use BSR format in fasp */
+#define FASP_NS_MASS ON  /** use NS solver with pressure mass matrix */
 }
 
 double Lx;
@@ -884,6 +886,35 @@ int main()
     dg_stokes::BilinearForm a_stokes(VQ, VQ);
     dg_stokes::LinearForm L_stokes(VQ);
 
+    // Construct mass matrix for pressure (for the uniform preconditioner)
+    dCSRmat Mp_bcsr;
+    printf("   Constructing the mass matrix for fluidic pressure (for linear solver)\n");
+        pressure_mass::FunctionSpace QQ(mesh);
+        pressure_mass::BilinearForm M_p(QQ, QQ);
+        Matrix MassPress;
+        assemble(MassPress,M_p);
+        unsigned int mnz = boost::tuples::get<3>(MassPress.data());
+        int mrow = MassPress.size(0);
+        int mcol = MassPress.size(1);
+        int* map = (int*)fasp_mem_calloc(mrow+1, sizeof(int));
+        const size_t* map_tmp = boost::tuples::get<0>(MassPress.data());
+        for (uint ii=0; ii<mrow+1; ii++) {
+            map[ii] = (int)map_tmp[ii];
+        }
+        int* mai = (int*)fasp_mem_calloc(mnz, sizeof(int));
+        const size_t* mai_tmp = boost::tuples::get<1>(MassPress.data());
+        for (uint ii=0; ii<mnz; ii++) {
+            mai[ii] = (int)mai_tmp[ii];
+        }
+        double* max = (double*)boost::tuples::get<2>(MassPress.data());
+             
+        Mp_bcsr.row = mrow;
+        Mp_bcsr.col = mcol;
+        Mp_bcsr.nnz = mnz;
+        Mp_bcsr.IA  = map;
+        Mp_bcsr.JA  = mai;
+        Mp_bcsr.val = max;
+
 
         
         
@@ -1213,7 +1244,12 @@ int main()
         printf("\n Step 3: solve the Stokes' linearized system\n"); fflush(stdout);
         INT flag = 0;
         //flag = fasp_solver_bdcsr_krylov_navier_stokes_with_pressure_mass(&A2bcsr, &b2bcsr, &NSsoluvec, &itparam, &amgparam, &iluparam, &schparam, &MP);
+#if FASP_NS_MASS
+        flag = fasp_solver_bdcsr_krylov_navier_stokes_with_pressure_mass(&A_stokes_bcsr, &b_stokes_bcsr, &soluvec_stokes, &itparam, &amgparam, &iluparam, &schparam, &Mp_bcsr);
+#else        
         flag = fasp_solver_bdcsr_krylov_navier_stokes(&A_stokes_bcsr, &b_stokes_bcsr, &soluvec_stokes, &itparam, &amgparam, &iluparam, &schparam);
+#endif
+
         if (flag<0) {
             printf("\n### WARNING: Solver failed! Exit status = %d.\n\n", flag); fflush(stdout);
         }
