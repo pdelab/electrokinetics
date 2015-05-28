@@ -1,0 +1,19 @@
+# Copyright (C) 2014 CCMA@PSU Maximilian Metti, Xiaozhe Hu
+#
+#   Define bilinear and linear forms for 
+#   the mass matrix of the pressure for Stokes' equations 
+#	using a Discontinuous Galerkin approach
+#
+# Compile this form with FFC: ffc -O -l dolfin pressure_mass.ufl
+
+##  Finite Element Space
+Q  = FiniteElement("Discontinuous Lagrange", tetrahedron, 1)
+
+##  Trial and Test Functions
+p = TrialFunction(Q)
+q = TestFunction(Q)
+
+
+a   = ( p*q )*dx
+
+L   = q*dx
