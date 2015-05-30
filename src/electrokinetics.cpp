@@ -70,8 +70,11 @@ public:
         values[0] = 0.0;
         values[1] = 0.0;
         values[2] = 0.0;
-        values[bc_direction]  = outflow*(x[bc_direction]+bc_distance/2.0)/(bc_distance);
-        values[bc_direction] -=  inflow*(x[bc_direction]-bc_distance/2.0)/(bc_distance) + 0.000001*(x[bc_direction]-bc_distance/2.0)/(bc_distance)*(x[bc_direction]+bc_distance/2.0)/(bc_distance);
+
+        if ( x[bc_direction] < -0.75*bc_distance )
+            values[bc_direction]  = outflow*(x[bc_direction]+bc_distance/2.0)/(bc_distance);
+        if ( x[bc_direction] >  0.75*bc_distance )
+            values[bc_direction] -=  inflow*(x[bc_direction]-bc_distance/2.0)/(bc_distance);
     }
 private:
     double outflow, inflow, bc_distance;
@@ -116,11 +119,11 @@ private:
 
 
 //  Dirichlet boundary condition
-class DirBCval : public Expression
+class DirNoSlip : public Expression
 {
 public:
     
-    DirBCval() : Expression(3) {}
+    DirNoSlip() : Expression(3) {}
     
     void eval(Array<double>& values, const Array<double>& x) const
     {
@@ -167,7 +170,7 @@ public:
 
 
 // Sub domain for Dirichlet boundary condition
-class DirichletBoundary : public SubDomain
+class NoSlipBoundary : public SubDomain
 {
     bool inside(const Array<double>& x, bool on_boundary) const
     {
@@ -177,7 +180,7 @@ class DirichletBoundary : public SubDomain
 
 
 // Sub domain for Dirichlet boundary condition
-class ChannelWalls : public SubDomain
+class NoFluxBoundary : public SubDomain
 {
     bool inside(const Array<double>& x, bool on_boundary) const
     {
@@ -189,25 +192,11 @@ class ChannelWalls : public SubDomain
 };
 
 
-// Sub domain for Dirichlet boundary condition
-class SideWalls : public SubDomain
-{
-    bool inside(const Array<double>& x, bool on_boundary) const
-    {
-        return on_boundary && (x[1] > Ly-DOLFIN_EPS and x[1] < -Ly+DOLFIN_EPS);
-    }
-};
-
-// Sub domain for Dirichlet boundary condition
-class TopAndBottom : public SubDomain
-{
-    bool inside(const Array<double>& x, bool on_boundary) const
-    {
-        return on_boundary && (x[2] > Lz-DOLFIN_EPS and x[2] < -Lz+DOLFIN_EPS);
-    }
-};
-
-
+//////////////////////////////////
+//                              //
+//  Charged surface regions     //
+//                              //
+//////////////////////////////////
 
 // Sub domain for homogeneous channel wall
 class dielectricRegion : public SubDomain
@@ -221,20 +210,14 @@ class dielectricRegion : public SubDomain
 };
 
 
-
-
 // Sub domain for homogeneous channel wall
 class dielectricChannel : public SubDomain
 {
     bool inside(const Array<double>& x, bool on_boundary) const
     {
-        bool toppatches = ((   (x[0] < -10./3.+DOLFIN_EPS) or (fabs(x[0]+5./6.) < 5./6.+DOLFIN_EPS)
-                            or (fabs(x[0]-15./6.) < 5./6.+DOLFIN_EPS))
-                           and x[2] > Lz - DOLFIN_EPS  );
+        bool toppatches = ( ((fabs(x[0]) < Lx/5.0) or (fabs(x[0]) > 3.0*Lx/5.0)) and (x[2] > Lz - DOLFIN_EPS) );
         
-        bool bottompatches = ((   (x[0] > 10./3.-DOLFIN_EPS) or (fabs(x[0]-5./6.) < 5./6.+DOLFIN_EPS)
-                               or (fabs(x[0]+15./6.) < 5./6.+DOLFIN_EPS))
-                              and x[2] < -Lz + DOLFIN_EPS  );
+        bool bottompatches = ( ((fabs(x[0]) >= Lx/5.0) and (fabs(x[0]) <= 3.0*Lx/5.0)) and (x[2] < -Lz + DOLFIN_EPS) );
         
         return ( on_boundary && (toppatches or bottompatches) );
         //                &&  (x[1] < -Ly+DOLFIN_EPS or x[1] > Ly-DOLFIN_EPS
@@ -1225,7 +1208,7 @@ int main()
           }
         
         // Refine marked elemetns
-        if ( refineCount>0 ) {
+        if ( refineCount>5 ) {
             printf(" Refine mesh\n "); fflush(stdout);
             mesh = refine(meshAdapt,cellMark);
             numRefines++;
@@ -1292,33 +1275,11 @@ int main()
 
 
     // Construct mass matrix for pressure (for the uniform preconditioner)
-    dCSRmat Mp_bcsr;
     printf("   Constructing the mass matrix for fluidic pressure (for linear solver)\n");
-        pressure_mass::FunctionSpace QQ(mesh);
-        pressure_mass::BilinearForm M_p(QQ, QQ);
-        Matrix MassPress;
-        assemble(MassPress,M_p);
-        unsigned int mnz = boost::tuples::get<3>(MassPress.data());
-        int mrow = MassPress.size(0);
-        int mcol = MassPress.size(1);
-        int* map = (int*)fasp_mem_calloc(mrow+1, sizeof(int));
-        const size_t* map_tmp = boost::tuples::get<0>(MassPress.data());
-        for (uint ii=0; ii<mrow+1; ii++) {
-            map[ii] = (int)map_tmp[ii];
-        }
-        int* mai = (int*)fasp_mem_calloc(mnz, sizeof(int));
-        const size_t* mai_tmp = boost::tuples::get<1>(MassPress.data());
-        for (uint ii=0; ii<mnz; ii++) {
-            mai[ii] = (int)mai_tmp[ii];
-        }
-        double* max = (double*)boost::tuples::get<2>(MassPress.data());
-             
-        Mp_bcsr.row = mrow;
-        Mp_bcsr.col = mcol;
-        Mp_bcsr.nnz = mnz;
-        Mp_bcsr.IA  = map;
-        Mp_bcsr.JA  = mai;
-        Mp_bcsr.val = max;
+    pressure_mass::FunctionSpace QQ(mesh);
+    pressure_mass::BilinearForm M_p(QQ, QQ);
+    Matrix MassPress;
+    assemble(MassPress,M_p);
     
 
 
@@ -1344,15 +1305,21 @@ int main()
         
     // Define subdomains and subdomains
     printf("Define subdomains \n"); fflush(stdout);
-      
+
+      // Stokes Subdomains
+      NoSlipBoundary inletoutlet;
+      NoFluxBoundary channelwalls;
+
+      FacetFunction<std::size_t> surfaces_stokes(mesh);
+      surfaces_stokes.set_all(1);
+      channelwalls.mark(surfaces_stokes,2);
+      meshfile << surfaces_stokes;
+
       //  PNP subdomains
       dielectricRegion dRegion;
       CellFunction<std::size_t> subdomains_pnp(mesh);
       subdomains_pnp.set_all(1);
       dRegion.mark(subdomains_pnp,2);
-      //a.dx = subdomains_pnp;
-      //L.dx = subdomains_pnp; 
-      //meshfile << subdomains_pnp;
 
       channelGate channelgate;
       dielectricChannel dchannel;
@@ -1361,45 +1328,59 @@ int main()
       channelgate.mark(surfaces_pnp,1);
       dchannel.mark(surfaces_pnp,2);
       L.ds = surfaces_pnp;
+      //a.dx = subdomains_pnp;
+      //L.dx = subdomains_pnp; 
+      //meshfile << subdomains_pnp;
 
 
     
     // Define Dirichlet boundary conditions
-    printf(" Define Dirichlet boundary condition \n\n"); fflush(stdout);
-      DirBCval DirBC;
+    printf(" Define Dirichlet boundary condition\n"); fflush(stdout);
+      DirNoSlip noslip;
       DirNoFlux noflux(mesh);
-      DirichletBoundary inletoutlet;
-      ChannelWalls channelwalls;
-      SideWalls sides;
-      TopAndBottom topbottom;
-
-      FacetFunction<std::size_t> surfaces_stokes(mesh);
-      surfaces_stokes.set_all(1);
-      channelwalls.mark(surfaces_stokes,2);
-      meshfile << surfaces_stokes;
 
 
       // Stokes Dirichlet BCs
       SubSpace V(VQ,0);
-      DirichletBC bc_stokes_0(V,DirBC,inletoutlet);
-      DirichletBC bc_stokes_2(V,noflux,channelwalls);
-
-      //SubSpace V1(V,1);
-      //SubSpace V2(V,2);
-
-      //DirichletBC bc_stokes_sides(V1,zero,sides);
-      //DirichletBC bc_stokes_topbottom(V2,zero,topbottom);
-
       std::vector<const DirichletBC*> bc_stokes;
-      bc_stokes.push_back(&bc_stokes_0);
-      bc_stokes.push_back(&bc_stokes_2);
+
+      // For box mesh
+      if ( strcmp(meshIn,"box")==0) {
+        printf(" Building boundary conditions for a box mesh\n");
+        DirichletBC bc_stokes_inout(V,noslip,inletoutlet);
+        DirichletBC bc_stokes_walls(V,noflux,channelwalls);
+
+        bc_stokes.push_back(&bc_stokes_inout);
+        bc_stokes.push_back(&bc_stokes_walls);
+      } else {
+
+        // Read in boundaries from file
+        printf(" Building boundary conditions for mesh\n");
+        DirichletBC bc_stokes_0(V,noslip,adapted_surfaces,1);
+        DirichletBC bc_stokes_1(V,noslip,adapted_surfaces,2);
+        DirichletBC bc_stokes_2(V,noflux,adapted_surfaces,3);
+      
+        bc_stokes.push_back(&bc_stokes_0);
+        bc_stokes.push_back(&bc_stokes_1);
+        bc_stokes.push_back(&bc_stokes_2);
+      }
 
       // PNP Dirichlet BCs
-      DirichletBC bc_1(W,DirBC,inletoutlet);
-      DirichletBC bc_2(W,DirBC,inletoutlet);
-      //DirichletBC bc_1(W,DirBC,adapted_surfaces,3);
-      //DirichletBC bc_2(W,DirBC,adapted_surfaces,4);
+      std::vector<const DirichletBC*> bc;
 
+      // For box mesh
+      if ( strcmp(meshIn,"box")==0) {
+        DirichletBC bc_1(W,noslip,inletoutlet);
+        bc.push_back(&bc_1);
+      } else {
+
+        // Read in boundaries from file
+        DirichletBC bc_0(W,noslip,adapted_surfaces,1);
+        DirichletBC bc_1(W,noslip,adapted_surfaces,2);
+      
+        bc.push_back(&bc_0);
+        bc.push_back(&bc_1);
+      }
       
 
         
@@ -1692,9 +1673,12 @@ int main()
         L_stokes.phi    = esIterate;
         L_stokes.cation = CatIterate;
         L_stokes.anion  = AnIterate;
-        assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-        bc_stokes_2.apply(b_stokes);
-        //bc_stokes_sides.apply(b_stokes); bc_stokes_topbottom.apply(b_stokes);
+        assemble(b_stokes,L_stokes); 
+
+        for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+            bc_stokes.data()[bc_ind]->apply(b_stokes);
+        //bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+
 
         dvector b_stokes_fasp;
         b_stokes_fasp.row = b_stokes.size();
@@ -1712,9 +1696,12 @@ int main()
         L.CatCat = CatIterate;
         L.AnAn   = AnIterate;
         L.EsEs   = esIterate;
-        assemble(b,L); bc_1.apply(b); bc_2.apply(b);
-        //bc_membrane_0.apply(b); bc_membrane_1.apply(b); bc_membrane_2.apply(b); bc_membrane_3.apply(b); bc_protein_0.apply(b);
-        //bc_protein_1.apply(b); bc_protein_2.apply(b); bc_protein_3.apply(b);
+
+        assemble(b,L); 
+        for ( uint bc_ind=0; bc_ind < bc.size(); bc_ind++ )
+            bc.data()[bc_ind]->apply(b);
+        //bc_1.apply(b); bc_2.apply(b);
+        
     
         dvector b_fasp;
         b_fasp.row = b.size();
@@ -1759,18 +1746,53 @@ int main()
 
         // Update Stokes coefficients
         //a_stokes.uu = VelocIterate;
-        assemble(A_stokes,a_stokes); bc_stokes_0.apply(A_stokes); 
-        bc_stokes_2.apply(A_stokes);
-        //bc_stokes_sides.apply(A_stokes); bc_stokes_topbottom.apply(A_stokes);
+        assemble(A_stokes,a_stokes); 
+
+        if ( strcmp(meshIn,"box")==0) {
+
+            // Apply BCs from expressions
+            printf(" Applying boundary conditions for a box mesh\n");
+            DirichletBC bc_stokes_inout(V,noslip,inletoutlet);
+            DirichletBC bc_stokes_walls(V,noflux,channelwalls);
+            bc_stokes_inout.apply(A_stokes);
+            bc_stokes_walls.apply(A_stokes);
+        } else {
+
+            // Apply BCs from file
+            printf(" Applying boundary conditions for mesh\n");
+            DirichletBC bc_stokes_r0(V,noslip,adapted_surfaces,1);
+            DirichletBC bc_stokes_r1(V,noslip,adapted_surfaces,2);
+            DirichletBC bc_stokes_r2(V,noflux,adapted_surfaces,3);
+            bc_stokes_r0.apply(A_stokes);
+            bc_stokes_r1.apply(A_stokes);
+            bc_stokes_r2.apply(A_stokes);
+        }
+        //bc_stokes_0.apply(A_stokes); bc_stokes_1.apply(A_stokes); bc_stokes_2.apply(A_stokes);
+
         
-        // Update PNP coefficients
-        a.uu     = VelocIterate;
-        a.CatCat = CatIterate;
-        a.AnAn   = AnIterate;
-        a.EsEs   = esIterate;
-        assemble(A,a); bc_1.apply(A); bc_2.apply(A);
-        //bc_membrane_0.apply(A); bc_membrane_1.apply(A); bc_membrane_2.apply(A); bc_membrane_3.apply(A);
-        //bc_protein_0.apply(A); bc_protein_1.apply(A); bc_protein_2.apply(A); bc_protein_3.apply(A);
+    // Update PNP coefficients
+    a.uu     = VelocIterate;
+    a.CatCat = CatIterate;
+    a.AnAn   = AnIterate;
+    a.EsEs   = esIterate;
+    assemble(A,a); 
+
+        // For box mesh
+      if ( strcmp(meshIn,"box")==0) {
+        DirichletBC bc_1(W,noslip,inletoutlet);
+        bc_1.apply(A);
+
+      } else {
+
+        // Read in boundaries from file
+        DirichletBC bc_0(W,noslip,adapted_surfaces,1);
+        DirichletBC bc_1(W,noslip,adapted_surfaces,2);
+      
+        bc_0.apply(A);
+        bc_1.apply(A);
+      }
+        //bc_1.apply(A); bc_2.apply(A);
+        
 
 
 
@@ -1851,6 +1873,34 @@ int main()
             // get App block
             fasp_dcsr_getblk(&A_stokes_fasp, press_idx.val, press_idx.val, press_idx.row, press_idx.row, A_stokes_bcsr.blocks[3]);
             
+
+
+
+
+
+
+        dCSRmat Mp_bcsr;
+        unsigned int mnz = boost::tuples::get<3>(MassPress.data());
+        int mrow = MassPress.size(0);
+        int mcol = MassPress.size(1);
+        int* map = (int*)fasp_mem_calloc(mrow+1, sizeof(int));
+        const size_t* map_tmp = boost::tuples::get<0>(MassPress.data());
+        for (uint ii=0; ii<mrow+1; ii++) {
+            map[ii] = (int)map_tmp[ii];
+        }
+        int* mai = (int*)fasp_mem_calloc(mnz, sizeof(int));
+        const size_t* mai_tmp = boost::tuples::get<1>(MassPress.data());
+        for (uint ii=0; ii<mnz; ii++) {
+            mai[ii] = (int)mai_tmp[ii];
+        }
+        double* max = (double*)boost::tuples::get<2>(MassPress.data());
+             
+        Mp_bcsr.row = mrow;
+        Mp_bcsr.col = mcol;
+        Mp_bcsr.nnz = mnz;
+        Mp_bcsr.IA  = map;
+        Mp_bcsr.JA  = mai;
+        Mp_bcsr.val = max;
 
 
 
@@ -2134,7 +2184,7 @@ int main()
 
 
         // DEBUG: check frobenius norms
-/*        double A_stokes_frob = 0.0;
+        double A_stokes_frob = 0.0;
         for(uint frobind = 0; frobind < nz2; frobind++) {
             A_stokes_frob += ax2[frobind]*ax2[frobind];
         }
@@ -2144,7 +2194,7 @@ int main()
 #if FASP_NS_MASS
         double M_p_frob = 0.0;
         for(uint frobind = 0; frobind < mnz; frobind++) {
-            M_p_frob += Mp_bcsr.val[frobind]*Mp_bcsr.val[frobind];
+            M_p_frob += max[frobind]*max[frobind];
         }
 
         printf("    Matrix norm: || M_p ||_F^2      = %e \n",M_p_frob); fflush(stdout);
@@ -2157,7 +2207,7 @@ int main()
         }
         printf("    Matrix norm: || A ||_F^2 = %e \n",A_frob);fflush(stdout);
         printf("    Vector norm: || b ||_0^2 = %e \n",lin_normb_fasp0);fflush(stdout);
-*/
+
 
 
             
@@ -2173,7 +2223,8 @@ int main()
         printf("\n Step 3.1: solve the Stokes' linearized system\n"); fflush(stdout);
         INT flag = 0;
         fasp_dvec_set(b_stokes_fasp.row, &soluvec_stokes, 0.0); // start with initial guess zero
-        //flag = fasp_solver_bdcsr_krylov_navier_stokes_with_pressure_mass(&A2bcsr, &b2bcsr, &NSsoluvec, &itparam, &amgparam, &iluparam, &schparam, &MP);
+
+
 
 #if FASP_NS_MASS
         flag = fasp_solver_bdcsr_krylov_navier_stokes_with_pressure_mass(&A_stokes_bcsr, &b_stokes_bcsr, &soluvec_stokes, &itparam, &amgparam, &iluparam, &schparam, &Mp_bcsr);
@@ -2206,7 +2257,11 @@ int main()
         L.du            = newton_veloc;
         L_stokes.du     = newton_veloc;
         L_stokes.dPress = newton_press;
-        assemble(b,L); bc_1.apply(b); bc_2.apply(b);
+        assemble(b,L); 
+        for ( uint bc_ind=0; bc_ind < bc.size(); bc_ind++ )
+            bc.data()[bc_ind]->apply(b);
+        //bc_1.apply(b); bc_2.apply(b);
+        
         b_fasp.val = (double*)b.data();
 #if FASP_BSR
         printf(" Residual for PNP already in FASP format \n"); fflush(stdout);
@@ -2219,9 +2274,11 @@ int main()
 #endif
 
         // Calculate residual for stokes (to verify agreement with solver)
-        assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-        bc_stokes_2.apply(b_stokes);
+        assemble(b_stokes,L_stokes); 
+        for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+            bc_stokes.data()[bc_ind]->apply(b_stokes);
         //bc_stokes_sides.apply(b_stokes); bc_stokes_topbottom.apply(b_stokes);
+
             b_stokes_fasp.val = (double*) b_stokes.data();
             for (i=0; i<nrow_u; i++)
                 b_stokes_bcsr.val[i]        = b_stokes_fasp.val[gidx_u[i]];
@@ -2281,9 +2338,11 @@ int main()
         L_stokes.dAn  = newton_anion;
         L_stokes.dPhi = newton_phi;
 
-            assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-            bc_stokes_2.apply(b_stokes);
-            //bc_stokes_sides.apply(b_stokes); bc_stokes_topbottom.apply(b_stokes);
+            assemble(b_stokes,L_stokes); 
+            for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+                bc_stokes.data()[bc_ind]->apply(b_stokes);
+            //bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+
             b_stokes_fasp.val = (double*) b_stokes.data();
             for (i=0; i<nrow_u; i++)
                 b_stokes_bcsr.val[i]        = b_stokes_fasp.val[gidx_u[i]];
@@ -2296,7 +2355,11 @@ int main()
         L.dAn  = newton_anion;
         L.dPhi = newton_phi;
 
-            assemble(b,L); bc_1.apply(b); bc_2.apply(b);
+            assemble(b,L); 
+            for ( uint bc_ind=0; bc_ind < bc.size(); bc_ind++ )
+                bc.data()[bc_ind]->apply(b);
+            //bc_1.apply(b); bc_2.apply(b);
+        
             b_fasp.val = (double*)b.data();
 #if FASP_BSR
             printf(" Residual for PNP already in FASP format \n"); fflush(stdout);
@@ -2335,8 +2398,8 @@ int main()
 
             Catfile << newton_cation;
             Anfile  << newton_anion;
-            phifile << newton_phi;*/
-
+            phifile << newton_phi;
+            */
 
     }
 
@@ -2369,6 +2432,7 @@ int main()
         fasp_ivec_free(&press_idx);
         fasp_dvec_free(&soluvec_stokes);
         free(ap2); free(ai2);
+        free(map); free(mai);
 
 
         printf(" ---------------------------\n"); fflush(stdout);
@@ -2460,17 +2524,19 @@ int main()
             L_stokes.cation  = updateCAT;
             L_stokes.anion   = updateAN;
             L_stokes.phi     = updatePHI;
-            assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-            bc_stokes_2.apply(b_stokes);
-            //bc_stokes_sides.apply(b_stokes); bc_stokes_topbottom.apply(b_stokes);
+            assemble(b_stokes,L_stokes); 
+            for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+                bc_stokes.data()[bc_ind]->apply(b_stokes);
+            //bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
 
             L.uu     = updateVELOC;
             L.CatCat = updateCAT;
             L.AnAn   = updateAN;
             L.EsEs   = updatePHI;
-            assemble(b,L); bc_1.apply(b); bc_2.apply(b);
-            //bc_membrane_0.apply(b); bc_membrane_1.apply(b); bc_membrane_2.apply(b); bc_membrane_3.apply(b);
-            //bc_protein_0.apply(b); bc_protein_1.apply(b); bc_protein_2.apply(b); bc_protein_3.apply(b);
+            assemble(b,L); 
+            for ( uint bc_ind=0; bc_ind < bc.size(); bc_ind++ )
+                bc.data()[bc_ind]->apply(b);
+            //bc_1.apply(b); bc_2.apply(b);
             
             // Compute relative residual for backtrack line search
             // Stokes
@@ -2539,17 +2605,21 @@ int main()
         L_stokes.cation  = CatIterate;
         L_stokes.anion   = AnIterate;
         L_stokes.phi     = esIterate;
-        assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-        bc_stokes_2.apply(b_stokes);
-        //bc_stokes_sides.apply(b_stokes); bc_stokes_topbottom.apply(b_stokes);
+        assemble(b_stokes,L_stokes); 
+        for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+            bc_stokes.data()[bc_ind]->apply(b_stokes);
+        //bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+
 
         L.uu     = VelocIterate;
         L.CatCat = CatIterate;
         L.AnAn   = AnIterate;
         L.EsEs   = esIterate;
-        assemble(b,L); bc_1.apply(b); bc_2.apply(b);
-        //bc_membrane_0.apply(b); bc_membrane_1.apply(b); bc_membrane_2.apply(b); bc_membrane_3.apply(b);
-        //bc_protein_0.apply(b); bc_protein_1.apply(b); bc_protein_2.apply(b); bc_protein_3.apply(b);
+        assemble(b,L); 
+        for ( uint bc_ind=0; bc_ind < bc.size(); bc_ind++ )
+            bc.data()[bc_ind]->apply(b);
+        //bc_1.apply(b); bc_2.apply(b);
+        
         
         // convert right hand side and measure relative residual
         printf(" Update the nonlinear residual \n");
