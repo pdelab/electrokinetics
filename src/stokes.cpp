@@ -100,11 +100,11 @@ private:
 
 
 //  Dirichlet boundary condition
-class DirBCval : public Expression
+class DirNoSlip : public Expression
 {
 public:
     
-    DirBCval() : Expression(3) {}
+    DirNoSlip() : Expression(3) {}
     
     void eval(Array<double>& values, const Array<double>& x) const
     {
@@ -151,7 +151,7 @@ public:
 
 
 // Sub domain for Dirichlet boundary condition
-class DirichletBoundary : public SubDomain
+class NoSlipBoundary : public SubDomain
 {
     bool inside(const Array<double>& x, bool on_boundary) const
     {
@@ -161,13 +161,13 @@ class DirichletBoundary : public SubDomain
 
 
 // Sub domain for Dirichlet boundary condition
-class ChannelWalls : public SubDomain
+class NoFluxBoundary : public SubDomain
 {
     bool inside(const Array<double>& x, bool on_boundary) const
     {
         bool sideWalls = (x[1] < -Ly+DOLFIN_EPS) or (x[1] > Ly-DOLFIN_EPS);
-        bool bottom    = (x[2] < -Lz+DOLFIN_EPS);
-        return on_boundary && (sideWalls or bottom);
+        bool topBottom = (x[2] < -Lz+DOLFIN_EPS) or (x[2] > Lz-DOLFIN_EPS);
+        return on_boundary && (sideWalls or topBottom);
     }
 };
 
@@ -882,13 +882,13 @@ int main()
     dg_stokes::FunctionSpace VQ(mesh);
     
     // Define variational forms
-    printf(" Define Stokes variational forms \n\n"); fflush(stdout);
+    printf(" Define Stokes variational forms \n"); fflush(stdout);
     dg_stokes::BilinearForm a_stokes(VQ, VQ);
     dg_stokes::LinearForm L_stokes(VQ);
 
     // Construct mass matrix for pressure (for the uniform preconditioner)
     dCSRmat Mp_bcsr;
-    printf("   Constructing the mass matrix for fluidic pressure (for linear solver)\n");
+    printf("  Constructing the mass matrix for fluidic pressure (for linear solver)\n\n");
         pressure_mass::FunctionSpace QQ(mesh);
         pressure_mass::BilinearForm M_p(QQ, QQ);
         Matrix MassPress;
@@ -926,11 +926,11 @@ int main()
     printf("Define subdomains \n"); fflush(stdout);
     
     // Define Dirichlet boundary conditions
-    printf(" Define Dirichlet boundary condition \n\n"); fflush(stdout);
-      DirBCval DirBC;
+    printf(" Define Dirichlet boundary condition \n"); fflush(stdout);
+      DirNoSlip noslip;
       DirNoFlux noflux(mesh);
-      DirichletBoundary inletoutlet;
-      ChannelWalls channelwalls;
+      NoSlipBoundary inletoutlet;
+      NoFluxBoundary channelwalls;
 
       FacetFunction<std::size_t> channelSurfaces(mesh);
       channelSurfaces.set_all(1);
@@ -941,16 +941,28 @@ int main()
 
       // Stokes Dirichlet BCs
       SubSpace V(VQ,0);
-      //DirichletBC bc_stokes_0(V,DirBC,inletoutlet);
-      //DirichletBC bc_stokes_2(V,noflux,channelwalls);
-      DirichletBC bc_stokes_0(V,DirBC,adapted_surfaces,1);
-      DirichletBC bc_stokes_1(V,DirBC,adapted_surfaces,2);
-      DirichletBC bc_stokes_2(V,noflux,adapted_surfaces,3);
       std::vector<const DirichletBC*> bc_stokes;
-      bc_stokes.push_back(&bc_stokes_0);
-      bc_stokes.push_back(&bc_stokes_1);
-      bc_stokes.push_back(&bc_stokes_2);
 
+      // For box mesh
+      if ( strcmp(meshIn,"box")==0) {
+        printf("  Building boundary conditions for a box mesh\n\n");
+        DirichletBC bc_stokes_inout(V,noslip,inletoutlet);
+        DirichletBC bc_stokes_walls(V,noflux,channelwalls);
+
+        bc_stokes.push_back(&bc_stokes_inout);
+        bc_stokes.push_back(&bc_stokes_walls);
+      } else {
+
+        // Read in boundaries from file
+        printf("  Reading boundary conditions for mesh\n\n");
+        DirichletBC bc_stokes_0(V,noslip,adapted_surfaces,1);
+        DirichletBC bc_stokes_1(V,noslip,adapted_surfaces,2);
+        DirichletBC bc_stokes_2(V,noflux,adapted_surfaces,3);
+      
+        bc_stokes.push_back(&bc_stokes_0);
+        bc_stokes.push_back(&bc_stokes_1);
+        bc_stokes.push_back(&bc_stokes_2);
+      }
       
 
         
@@ -1066,8 +1078,10 @@ int main()
     printf(" Measure initial residual \n");
         L_stokes.uu     = VelocIterate;
         L_stokes.pp     = PressIterate;    
-        assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes);
-        bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+        assemble(b_stokes,L_stokes); 
+        for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+            bc_stokes.data()[bc_ind]->apply(b_stokes);
+        //bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
 
         dvector b_stokes_fasp;
         b_stokes_fasp.row = b_stokes.size();
@@ -1106,8 +1120,28 @@ int main()
 
         // Update Stokes coefficients
         //a_stokes.uu = VelocIterate;
-        assemble(A_stokes,a_stokes); bc_stokes_0.apply(A_stokes);
-        bc_stokes_1.apply(A_stokes); bc_stokes_2.apply(A_stokes);
+        assemble(A_stokes,a_stokes); 
+
+        if ( strcmp(meshIn,"box")==0) {
+
+            // Apply BCs from expressions
+            printf("  Applying boundary conditions from expressions\n\n");
+            DirichletBC bc_stokes_inout(V,noslip,inletoutlet);
+            DirichletBC bc_stokes_walls(V,noflux,channelwalls);
+            bc_stokes_inout.apply(A_stokes);
+            bc_stokes_walls.apply(A_stokes);
+        } else {
+
+            // Apply BCs from file
+            printf("  Applying boundary conditions for mesh\n\n");
+            DirichletBC bc_stokes_0(V,noslip,adapted_surfaces,1);
+            DirichletBC bc_stokes_1(V,noslip,adapted_surfaces,2);
+            DirichletBC bc_stokes_2(V,noflux,adapted_surfaces,3);
+            bc_stokes_0.apply(A_stokes);
+            bc_stokes_1.apply(A_stokes);
+            bc_stokes_2.apply(A_stokes);
+        }
+        //bc_stokes_0.apply(A_stokes); bc_stokes_1.apply(A_stokes); bc_stokes_2.apply(A_stokes);
 
 
         printf(" ----------------------------------------------\n"); fflush(stdout);
@@ -1331,8 +1365,10 @@ int main()
             // Evaluate residual
             L_stokes.uu      = updateVELOC;
             L_stokes.pp      = updatePRESS;
-            assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes); 
-            bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+            assemble(b_stokes,L_stokes); 
+            for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+                bc_stokes.data()[bc_ind]->apply(b_stokes);
+            //bc_stokes_0.apply(b_stokes); bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
 
             
             // Compute relative residual for backtrack line search
@@ -1377,8 +1413,10 @@ int main()
         printf(" Update variational forms \n"); fflush(stdout);
         L_stokes.uu      = VelocIterate;
         L_stokes.pp      = PressIterate;
-        assemble(b_stokes,L_stokes); bc_stokes_0.apply(b_stokes);
-        bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
+        assemble(b_stokes,L_stokes); 
+        for ( uint bc_ind=0; bc_ind < bc_stokes.size(); bc_ind++ )
+            bc_stokes.data()[bc_ind]->apply(b_stokes);
+        //bc_stokes_0.apply(b_stokes); bc_stokes_1.apply(b_stokes); bc_stokes_2.apply(b_stokes);
 
         
         // convert right hand side and measure relative residual
